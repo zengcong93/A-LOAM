@@ -89,14 +89,14 @@ pcl::PointCloud<PointType>::Ptr laserCloudFullRes(new pcl::PointCloud<PointType>
 int laserCloudCornerLastNum = 0;
 int laserCloudSurfLastNum = 0;
 
-// Transformation from current frame to world frame
+// Transformation from current frame to world frame// Lidar Odometry线程估计的frame在world坐标系的位姿P
 Eigen::Quaterniond q_w_curr(1, 0, 0, 0);
 Eigen::Vector3d t_w_curr(0, 0, 0);
 
-// q_curr_last(x, y, z, w), t_curr_last
+// q_curr_last(x, y, z, w), t_curr_last// 点云特征匹配时的优化变量
 double para_q[4] = {0, 0, 0, 1};
 double para_t[3] = {0, 0, 0};
-
+//下面的2个分别是优化变量para_q和para_t的映射：表示的是两个world坐标系下的位姿P之间的增量，例如△P = P0.inverse() * P1
 Eigen::Map<Eigen::Quaterniond> q_last_curr(para_q);
 Eigen::Map<Eigen::Vector3d> t_last_curr(para_t);
 
@@ -117,7 +117,7 @@ void TransformToStart(PointType const *const pi, PointType *const po)
     else
         s = 1.0;
     //s = 1;
-    Eigen::Quaterniond q_point_last = Eigen::Quaterniond::Identity().slerp(s, q_last_curr);
+    Eigen::Quaterniond q_point_last = Eigen::Quaterniond::Identity().slerp(s, q_last_curr);  //(球面线性插值)
     Eigen::Vector3d t_point_last = s * t_last_curr;
     Eigen::Vector3d point(pi->x, pi->y, pi->z);
     Eigen::Vector3d un_point = q_point_last * point + t_point_last;
@@ -129,11 +129,17 @@ void TransformToStart(PointType const *const pi, PointType *const po)
 }
 
 // transform all lidar points to the start of the next frame
+/*
+Pstart = Re-s * Pend + Te-s
+Re-s^-1 * Pstart = Pend + Re-s^-1 * Te-s
+Pend = R^-1 * (Pstart - Te-s)
+*/
 
 void TransformToEnd(PointType const *const pi, PointType *const po)
 {
     // undistort point first
     pcl::PointXYZI un_point_tmp;
+     //先统一到起始时刻
     TransformToStart(pi, &un_point_tmp);
 
     Eigen::Vector3d un_point(un_point_tmp.x, un_point_tmp.y, un_point_tmp.z);
@@ -299,16 +305,27 @@ int main(int argc, char **argv)
                     for (int i = 0; i < cornerPointsSharpNum; ++i)
                     {
                         TransformToStart(&(cornerPointsSharp->points[i]), &pointSel);
+                        //param：
+                        // point：以这个传入的点为基准，基准点。
+                        // k：取几个离基本点最近的点
+                        // k_indices：这几个K点的下脚标
+                        // k_sqr_distances：这几个K点对于基准点的距离
+
+                        //特征点O  pointSel
+                        //最近点A closestPointInd 
                         kdtreeCornerLast->nearestKSearch(pointSel, 1, pointSearchInd, pointSearchSqDis);
 
                         int closestPointInd = -1, minPointInd2 = -1;
                         if (pointSearchSqDis[0] < DISTANCE_SQ_THRESHOLD)
                         {
                             closestPointInd = pointSearchInd[0];
+                            //最近点scan  id
                             int closestPointScanID = int(laserCloudCornerLast->points[closestPointInd].intensity);
 
                             double minPointSqDis2 = DISTANCE_SQ_THRESHOLD;
-                            // search in the direction of increasing scan line
+                            // search in the direction of increasing scan 
+                            //line按照scan的顺序提取的，所以laserCloudCornerLast中的点也是按照scanID递增的顺序存放的
+                            // 寻找点O的另外一个最近邻的点（记为点B）
                             for (int j = closestPointInd + 1; j < (int)laserCloudCornerLast->points.size(); ++j)
                             {
                                 // if in the same scan line, continue
@@ -360,6 +377,7 @@ int main(int argc, char **argv)
                                 }
                             }
                         }
+                        //特征点O的两个最临近点A，B
                         if (minPointInd2 >= 0) // both closestPointInd and minPointInd2 is valid
                         {
                             Eigen::Vector3d curr_point(cornerPointsSharp->points[i].x,
@@ -377,12 +395,15 @@ int main(int argc, char **argv)
                                 s = (cornerPointsSharp->points[i].intensity - int(cornerPointsSharp->points[i].intensity)) / SCAN_PERIOD;
                             else
                                 s = 1.0;
+
+                            // 用点O，A，B构造点到线的距离的残差项，注意这三个点都是在上一帧的Lidar坐标系下，即，残差 = 点O到直线AB的距离
+                            // 具体到介绍lidarFactor.cpp时再说明该残差的具体计算方法
                             ceres::CostFunction *cost_function = LidarEdgeFactor::Create(curr_point, last_point_a, last_point_b, s);
                             problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
                             corner_correspondence++;
                         }
                     }
-
+                    // 与上面的建立corner特征点之间的关联类似，寻找平面特征点O的最近邻点ABC（只找3个最近邻点），即基于最近邻原理建立surf特征点之间的关联，find correspondence for plane features
                     // find correspondence for plane features
                     for (int i = 0; i < surfPointsFlatNum; ++i)
                     {
@@ -475,6 +496,8 @@ int main(int argc, char **argv)
                                     s = (surfPointsFlat->points[i].intensity - int(surfPointsFlat->points[i].intensity)) / SCAN_PERIOD;
                                 else
                                     s = 1.0;
+                                // 用点O，A，B，C构造点到面的距离的残差项，注意这三个点都是在上一帧的Lidar坐标系下，即，残差 = 点O到平面ABC的距离
+                                // 同样的，具体到介绍lidarFactor.cpp时再说明该残差的具体计算方法
                                 ceres::CostFunction *cost_function = LidarPlaneFactor::Create(curr_point, last_point_a, last_point_b, last_point_c, s);
                                 problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
                                 plane_correspondence++;

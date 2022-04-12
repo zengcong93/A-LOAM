@@ -18,6 +18,8 @@ find_package(catkin REQUIRED COMPONENTS
   tf
 )
 
+set(Ceres_DIR "/home/zhihui/code/AliveCaptureOnboard/DataCapture/3rdParty/lib/cmake/Ceres")
+
 #find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)

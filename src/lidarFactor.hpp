@@ -31,7 +31,7 @@ struct LidarEdgeFactor
 
 		Eigen::Matrix<T, 3, 1> lp;
 		lp = q_last_curr * cp + t_last_curr;
-
+		//点到线的距离
 		Eigen::Matrix<T, 3, 1> nu = (lp - lpa).cross(lp - lpb);
 		Eigen::Matrix<T, 3, 1> de = lpa - lpb;
 
@@ -47,6 +47,11 @@ struct LidarEdgeFactor
 	{
 		return (new ceres::AutoDiffCostFunction<
 				LidarEdgeFactor, 3, 4, 3>(
+//                               ^  ^  ^
+//                               |  |  |
+//                  残差的维度 ____|  |  |
+//              优化变量q的维度 _______|  |
+//              优化变量t的维度 __________|
 			new LidarEdgeFactor(curr_point_, last_point_a_, last_point_b_, s_)));
 	}
 
