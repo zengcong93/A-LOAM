@@ -159,6 +159,7 @@ void laserCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
     bool halfPassed = false;
     int count = cloudSize;
     PointType point;
+    //点云分为N_SCANS个点云
     std::vector<pcl::PointCloud<PointType>> laserCloudScans(N_SCANS);
     for (int i = 0; i < cloudSize; i++)
     {

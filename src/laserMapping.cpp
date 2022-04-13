@@ -244,7 +244,7 @@ void process()
 	{
 		while (!cornerLastBuf.empty() && !surfLastBuf.empty() &&
 			!fullResBuf.empty() && !odometryBuf.empty())
-		{
+		{// odometryBuf只保留一个与cornerLastBuf.front()时间同步的最新消息
 			mBuf.lock();
 			while (!odometryBuf.empty() && odometryBuf.front()->header.stamp.toSec() < cornerLastBuf.front()->header.stamp.toSec())
 				odometryBuf.pop();
@@ -305,7 +305,7 @@ void process()
 			t_wodom_curr.y() = odometryBuf.front()->pose.pose.position.y;
 			t_wodom_curr.z() = odometryBuf.front()->pose.pose.position.z;
 			odometryBuf.pop();
-
+			// 清空cornerLastBuf的历史缓存，为了LOAM的整体实时性
 			while(!cornerLastBuf.empty())
 			{
 				cornerLastBuf.pop();
@@ -315,7 +315,7 @@ void process()
 			mBuf.unlock();
 
 			TicToc t_whole;
-
+			//odom to map transform
 			transformAssociateToMap();
 
 			TicToc t_shift;
@@ -324,6 +324,7 @@ void process()
 			// 进行cube的管理，而数组的index只用是正数，所以要保证IJK坐标都是正数，所以加了laserCloudCenWidth/Heigh/Depth
 			// 的偏移，来使得当前位置尽量位于submap的中心处，也就是使得上图中的五角星位置尽量处于所有格子的中心附近，
 			// 偏移laserCloudCenWidth/Heigh/Depth会动态调整，来保证当前位置尽量位于submap的中心处。
+			//10*10*5
 			int centerCubeI = int((t_w_curr.x() + 25.0) / 50.0) + laserCloudCenWidth;
 			int centerCubeJ = int((t_w_curr.y() + 25.0) / 50.0) + laserCloudCenHeight;
 			int centerCubeK = int((t_w_curr.z() + 25.0) / 50.0) + laserCloudCenDepth;
@@ -563,7 +564,7 @@ void process()
 			int laserCloudCornerFromMapNum = laserCloudCornerFromMap->points.size();
 			int laserCloudSurfFromMapNum = laserCloudSurfFromMap->points.size();
 
-			//
+			//last  lidar
 			pcl::PointCloud<PointType>::Ptr laserCloudCornerStack(new pcl::PointCloud<PointType>());
 			downSizeFilterCorner.setInputCloud(laserCloudCornerLast);
 			downSizeFilterCorner.filter(*laserCloudCornerStack);
@@ -576,6 +577,7 @@ void process()
 
 			printf("map prepare time %f ms\n", t_shift.toc());
 			printf("map corner num %d  surf num %d \n", laserCloudCornerFromMapNum, laserCloudSurfFromMapNum);
+			//submap 特征点
 			if (laserCloudCornerFromMapNum > 10 && laserCloudSurfFromMapNum > 50)
 			{
 				TicToc t_opt;
@@ -766,6 +768,7 @@ void process()
 			transformUpdate();
 
 			TicToc t_add;
+			// 下面两个for loop的作用就是将当前帧的特征点云，逐点进行操作：转换到world坐标系并添加到对应位置的cube中  
 			for (int i = 0; i < laserCloudCornerStackNum; i++)
 			{
 				pointAssociateToMap(&laserCloudCornerStack->points[i], &pointSel);
@@ -817,6 +820,8 @@ void process()
 
 			
 			TicToc t_filter;
+			// 因为新增加了点云，对之前已经存有点云的cube全部重新进行一次降采样
+			// 这个地方可以简单优化一下：如果之前的cube没有新添加点就不需要再降采样
 			for (int i = 0; i < laserCloudValidNum; i++)
 			{
 				int ind = laserCloudValidInd[i];
@@ -835,6 +840,7 @@ void process()
 			
 			TicToc t_pub;
 			//publish surround map for every 5 frame
+			//submap 5×5×
 			if (frameCount % 5 == 0)
 			{
 				laserCloudSurround->clear();
@@ -852,6 +858,7 @@ void process()
 				pubLaserCloudSurround.publish(laserCloudSurround3);
 			}
 
+			//localmap 21×21×10
 			if (frameCount % 20 == 0)
 			{
 				pcl::PointCloud<PointType> laserCloudMap;
@@ -945,15 +952,15 @@ int main(int argc, char **argv)
 
 	ros::Subscriber subLaserCloudFullRes = nh.subscribe<sensor_msgs::PointCloud2>("/velodyne_cloud_3", 100, laserCloudFullResHandler);
 
-	pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surround", 100);
+	pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surround", 100); //submap
 
-	pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_map", 100);
+	pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_map", 100);  //local map
 
 	pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_registered", 100);
 
 	pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 100);
 
-	pubOdomAftMappedHighFrec = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init_high_frec", 100);
+	pubOdomAftMappedHighFrec = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init_high_frec", 100);//10hz
 
 	pubLaserAfterMappedPath = nh.advertise<nav_msgs::Path>("/aft_mapped_path", 100);
 
